@@ -54,8 +54,76 @@ func (hs *HTTPServer) getFrontendSettingsMap(c *models.ReqContext) (map[string]i
 		}
 	}
 
-	pluginsToPreload, defaultDatasource, dataSources := processDataSources(orgDataSources, enabledPlugins,
-		pluginsToPreload)
+	for _, ds := range orgDataSources {
+		url := ds.Url
+
+		if ds.Access == models.DS_ACCESS_PROXY {
+			url = "/api/datasources/proxy/" + strconv.FormatInt(ds.Id, 10)
+		}
+
+		var dsMap = map[string]interface{}{
+			"id":   ds.Id,
+			"uid":  ds.Uid,
+			"type": ds.Type,
+			"name": ds.Name,
+			"url":  url,
+		}
+
+		meta, exists := enabledPlugins.DataSources[ds.Type]
+		if !exists {
+			log.Errorf(3, "Could not find plugin definition for data source: %v", ds.Type)
+			continue
+		}
+
+		if meta.Preload {
+			pluginsToPreload = append(pluginsToPreload, meta.Module)
+		}
+
+		dsMap["meta"] = meta
+
+		if ds.IsDefault {
+			defaultDatasource = ds.Name
+		}
+
+		jsonData := ds.JsonData
+		if jsonData == nil {
+			jsonData = simplejson.New()
+		}
+
+		dsMap["jsonData"] = jsonData
+
+		if ds.Access == models.DS_ACCESS_DIRECT {
+			if ds.BasicAuth {
+				dsMap["basicAuth"] = util.GetBasicAuthHeader(ds.BasicAuthUser, ds.DecryptedBasicAuthPassword())
+			}
+			if ds.WithCredentials {
+				dsMap["withCredentials"] = ds.WithCredentials
+			}
+
+			if ds.Type == models.DS_INFLUXDB_08 {
+				dsMap["username"] = ds.User
+				dsMap["password"] = ds.DecryptedPassword()
+				dsMap["url"] = url + "/db/" + ds.Database
+			}
+
+			if ds.Type == models.DS_INFLUXDB {
+				dsMap["username"] = ds.User
+				dsMap["password"] = ds.DecryptedPassword()
+				dsMap["url"] = url
+			}
+		}
+
+		if (ds.Type == models.DS_INFLUXDB) || (ds.Type == models.DS_ES) {
+			dsMap["database"] = ds.Database
+		}
+
+		if ds.Type == models.DS_PROMETHEUS {
+			// add unproxied server URL for link to Prometheus web UI
+			jsonData.Set("directUrl", ds.Url)
+		}
+
+		datasources[ds.Name] = dsMap
+	}
 
 	// add datasources that are built in (meaning they are not added via data sources page, nor have any entry in datasource table)
 	for _, ds := range plugins.DataSources {

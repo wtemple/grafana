@@ -337,7 +337,7 @@ func parseAppUrlAndSubUrl(section *ini.Section) (string, string, error) {
 	// Check if has app suburl.
 	url, err := url.Parse(appUrl)
 	if err != nil {
-		log.Fatal(4, "Invalid root_url(%s): %s", appUrl, err)
+		log.Fatalf(4, "Invalid root_url(%s): %s", appUrl, err)
 	}
 	appSubUrl := strings.TrimSuffix(url.Path, "/")
 
@@ -445,7 +445,7 @@ func getCommandLineProperties(args []string) map[string]string {
 		trimmed := strings.TrimPrefix(arg, "cfg:")
 		parts := strings.Split(trimmed, "=")
 		if len(parts) != 2 {
-			log.Fatal(3, "Invalid command line argument. argument: %v", arg)
+			log.Fatalf(3, "Invalid command line argument. argument: %v", arg)
 			return nil
 		}
 
@@ -534,7 +534,7 @@ func (cfg *Cfg) loadConfiguration(args *CommandLineArgs) (*ini.File, error) {
 		if err2 != nil {
 			return nil, err2
 		}
-		log.Fatal(3, err.Error())
+		log.Fatalf(3, err.Error())
 	}
 
 	// apply environment overrides
@@ -700,7 +700,24 @@ func (cfg *Cfg) Load(args *CommandLineArgs) error {
 	if err := readRenderingSettings(iniFile, cfg); err != nil {
 		return err
 	}
+	cfg.RendererCallbackUrl, err = valueAsString(renderSec, "callback_url", "")
+	if err != nil {
+		return err
+	}
+	if cfg.RendererCallbackUrl == "" {
+		cfg.RendererCallbackUrl = AppUrl
+	} else {
+		if cfg.RendererCallbackUrl[len(cfg.RendererCallbackUrl)-1] != '/' {
+			cfg.RendererCallbackUrl += "/"
+		}
+		_, err := url.Parse(cfg.RendererCallbackUrl)
+		if err != nil {
+			log.Fatalf(4, "Invalid callback_url(%s): %s", cfg.RendererCallbackUrl, err)
+		}
+	}
+	cfg.RendererConcurrentRequestLimit = renderSec.Key("concurrent_render_request_limit").MustInt(30)
 
+	cfg.ImagesDir = filepath.Join(cfg.DataPath, "png")
 	cfg.TempDataLifetime = iniFile.Section("paths").Key("temp_data_lifetime").MustDuration(time.Second * 3600 * 24)
 	cfg.MetricsEndpointEnabled = iniFile.Section("metrics").Key("enabled").MustBool(true)
 	cfg.MetricsEndpointBasicAuthUsername, err = valueAsString(iniFile.Section("metrics"), "basic_auth_username", "")
@@ -762,7 +779,7 @@ func (cfg *Cfg) Load(args *CommandLineArgs) error {
 	cfg.readQuotaSettings()
 
 	if VerifyEmailEnabled && !cfg.Smtp.Enabled {
-		log.Warn("require_email_validation is enabled but smtp is disabled")
+		log.Warnf("require_email_validation is enabled but smtp is disabled")
 	}
 
 	// check old key  name
