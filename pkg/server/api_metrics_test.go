@@ -21,10 +21,10 @@ import (
 	"github.com/grafana/grafana-plugin-sdk-go/data"
 	"github.com/grafana/grafana/pkg/tsdb"
 	"github.com/grafana/grafana/pkg/tsdb/cloudwatch"
-	_ "github.com/grafana/grafana/pkg/tsdb/cloudwatch"
 
 	cwapi "github.com/aws/aws-sdk-go/service/cloudwatch"
 	"github.com/grafana/grafana/pkg/api/dtos"
+	"github.com/grafana/grafana/pkg/components/null"
 	"github.com/grafana/grafana/pkg/components/simplejson"
 	"github.com/grafana/grafana/pkg/infra/fs"
 	"github.com/grafana/grafana/pkg/models"
@@ -34,7 +34,8 @@ import (
 	"gopkg.in/ini.v1"
 )
 
-func TestQueryCloudWatchMetrics(t *testing.T) {
+func TestQueryCloudWatch_MetricFind(t *testing.T) {
+	const queryType = "metricFindQuery"
 	grafDir, cfgPath := createGrafDir(t)
 	sqlStore := setUpDatabase(t, grafDir)
 	addr := startGrafana(t, grafDir, cfgPath, sqlStore)
@@ -66,7 +67,7 @@ func TestQueryCloudWatchMetrics(t *testing.T) {
 		req := dtos.MetricRequest{
 			Queries: []*simplejson.Json{
 				simplejson.NewFromAny(map[string]interface{}{
-					"type":         "metricFindQuery",
+					"type":         queryType,
 					"subtype":      "metrics",
 					"region":       "us-east-1",
 					"namespace":    "custom",
@@ -107,7 +108,8 @@ func TestQueryCloudWatchMetrics(t *testing.T) {
 	})
 }
 
-func TestQueryCloudWatchLogs(t *testing.T) {
+func TestQueryCloudWatch_Logs(t *testing.T) {
+	const queryType = "logAction"
 	grafDir, cfgPath := createGrafDir(t)
 	sqlStore := setUpDatabase(t, grafDir)
 	addr := startGrafana(t, grafDir, cfgPath, sqlStore)
@@ -128,7 +130,7 @@ func TestQueryCloudWatchLogs(t *testing.T) {
 		req := dtos.MetricRequest{
 			Queries: []*simplejson.Json{
 				simplejson.NewFromAny(map[string]interface{}{
-					"type":         "logAction",
+					"type":         queryType,
 					"subtype":      "DescribeLogGroups",
 					"region":       "us-east-1",
 					"datasourceId": 1,
@@ -157,6 +159,110 @@ func TestQueryCloudWatchLogs(t *testing.T) {
 				"A": {
 					RefId:      "A",
 					Dataframes: dataFrames,
+				},
+			},
+		}, tr)
+	})
+}
+
+func TestQueryCloudWatch_TimeSeries(t *testing.T) {
+	const queryType = "timeSeriesQuery"
+	grafDir, cfgPath := createGrafDir(t)
+	sqlStore := setUpDatabase(t, grafDir)
+	addr := startGrafana(t, grafDir, cfgPath, sqlStore)
+
+	origNewCWClient := cloudwatch.NewCWClient
+	t.Cleanup(func() {
+		cloudwatch.NewCWClient = origNewCWClient
+	})
+
+	var client cloudwatch.FakeCWClient
+	cloudwatch.NewCWClient = func(sess *session.Session) cloudwatchiface.CloudWatchAPI {
+		return client
+	}
+
+	t.Run("", func(t *testing.T) {
+		t1 := time.Date(2020, 7, 7, 0, 0, 0, 0, time.UTC)
+		t2 := time.Date(2020, 7, 7, 23, 59, 59, 0, time.UTC)
+		client = cloudwatch.FakeCWClient{
+			MetricDataOutput: &cwapi.GetMetricDataOutput{
+				MetricDataResults: []*cwapi.MetricDataResult{
+					{
+						Id:         aws.String("queryid_stat1"),
+						Label:      aws.String("label"),
+						StatusCode: aws.String("Complete"),
+						Timestamps: []*time.Time{&t1, &t2},
+						Values:     []*float64{aws.Float64(1), aws.Float64(2)},
+					},
+					{
+						Id:         aws.String("queryid_stat2"),
+						Label:      aws.String("label"),
+						StatusCode: aws.String("Complete"),
+						Timestamps: []*time.Time{&t1, &t2},
+						Values:     []*float64{aws.Float64(3), aws.Float64(4)},
+					},
+				},
+			},
+		}
+
+		req := dtos.MetricRequest{
+			From: t1.Format(time.RFC3339),
+			To:   t2.Format(time.RFC3339),
+			Queries: []*simplejson.Json{
+				simplejson.NewFromAny(map[string]interface{}{
+					"type":       queryType,
+					"subtype":    "metrics",
+					"region":     "us-east-1",
+					"namespace":  "custom",
+					"metricName": "test",
+					"dimensions": map[string]interface{}{"dim1": []interface{}{
+						"val1", "val2",
+					}},
+					"statistics":   []string{"stat1", "stat2"},
+					"datasourceId": 1,
+					"refId":        "id",
+				}),
+			},
+		}
+		tr := makeCWRequest(t, req, addr)
+
+		// TODO: Use gocmp instead, so we can ignore tricky fields (timestamps)
+		assert.Equal(t, tsdb.Response{
+			Results: map[string]*tsdb.QueryResult{
+				"id": {
+					RefId: "id",
+					Meta: simplejson.NewFromAny(map[string]interface{}{
+						"gmdMeta": []interface{}{
+							map[string]interface{}{
+								"Expression": `REMOVE_EMPTY(SEARCH('{custom,"dim1"} MetricName="test" "dim1"=("val1" OR "val2")', 'stat1', 60))`,
+								"ID":         "queryid_stat1",
+								"Period":     float64(60),
+							},
+							map[string]interface{}{
+								"Expression": `REMOVE_EMPTY(SEARCH('{custom,"dim1"} MetricName="test" "dim1"=("val1" OR "val2")', 'stat2', 60))`,
+								"ID":         "queryid_stat2",
+								"Period":     float64(60),
+							},
+						},
+					}),
+					Series: tsdb.TimeSeriesSlice{
+						{
+							Name: "test_stat1",
+							Points: tsdb.TimeSeriesPoints{
+								tsdb.NewTimePoint(null.FloatFrom(1), 0),
+								tsdb.NewTimePoint(null.FloatFromPtr(nil), 0),
+								tsdb.NewTimePoint(null.FloatFrom(2), 0),
+							},
+						},
+						{
+							Name: "test_stat2",
+							Points: tsdb.TimeSeriesPoints{
+								tsdb.NewTimePoint(null.FloatFrom(3), 0),
+								tsdb.NewTimePoint(null.FloatFromPtr(nil), 0),
+								tsdb.NewTimePoint(null.FloatFrom(4), 0),
+							},
+						},
+					},
 				},
 			},
 		}, tr)

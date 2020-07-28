@@ -67,10 +67,59 @@ func (r *QueryResult) UnmarshalJSON(b []byte) error {
 		meta = simplejson.NewFromAny(mm)
 	}
 	var series TimeSeriesSlice
-	/* TODO
 	if m["series"] != nil {
+		ss, ok := m["series"].([]interface{})
+		if !ok {
+			return fmt.Errorf("can't decode field series - not an array of TimeSeriesSlice")
+		}
+		for _, tsi := range ss {
+			tsm, ok := tsi.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("can't decode field series - not an array of TimeSeriesSlice")
+			}
+			name, ok := tsm["name"].(string)
+			if !ok {
+				return fmt.Errorf("can't decode field series - not an array of TimeSeriesSlice")
+			}
+			var points TimeSeriesPoints
+			pis, ok := tsm["points"].([]interface{})
+			if !ok {
+				return fmt.Errorf("can't decode field series - not an array of TimeSeriesSlice")
+			}
+			for _, pi := range pis {
+				vis, ok := pi.([]interface{})
+				if !ok {
+					return fmt.Errorf("can't decode field series - not an array of TimeSeriesSlice")
+				}
+				if len(vis) != 2 {
+					return fmt.Errorf("can't decode field series - not an array of TimeSeriesSlice")
+				}
+
+				var val *float64
+				if vis[0] != nil {
+					v, ok := vis[0].(float64)
+					if !ok {
+						return fmt.Errorf("can't decode field series - not an array of TimeSeriesSlice")
+					}
+					val = &v
+				}
+				ts, ok := vis[1].(float64)
+				if !ok {
+					return fmt.Errorf("can't decode field series - not an array of TimeSeriesSlice")
+				}
+
+				p := NewTimePoint(null.FloatFromPtr(val), ts)
+				points = append(points, p)
+			}
+			s := TimeSeries{
+				Name:   name,
+				Points: points,
+				// TODO
+				// Tags: tags,
+			}
+			series = append(series, &s)
+		}
 	}
-	*/
 	var tables []*Table
 	if m["tables"] != nil {
 		ts, ok := m["tables"].([]interface{})

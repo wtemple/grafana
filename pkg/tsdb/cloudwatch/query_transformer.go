@@ -13,7 +13,9 @@ import (
 // has more than one statistic defined, one cloudwatchQuery will be created for each statistic.
 // If the query doesn't have an Id defined by the user, we'll give it an with format `query[RefId]`. In the case
 // the incoming query had more than one stat, it will ge an id like `query[RefId]_[StatName]`, eg queryC_Average
-func (e *cloudWatchExecutor) transformRequestQueriesToCloudWatchQueries(requestQueries []*requestQuery) (map[string]*cloudWatchQuery, error) {
+func (e *cloudWatchExecutor) transformRequestQueriesToCloudWatchQueries(requestQueries []*requestQuery) (
+	map[string]*cloudWatchQuery, error) {
+	plog.Debug("Transforming CloudWatch request queries")
 	cloudwatchQueries := make(map[string]*cloudWatchQuery)
 	for _, requestQuery := range requestQueries {
 		for _, stat := range requestQuery.Statistics {
@@ -52,12 +54,17 @@ func (e *cloudWatchExecutor) transformRequestQueriesToCloudWatchQueries(requestQ
 
 func (e *cloudWatchExecutor) transformQueryResponseToQueryResult(cloudwatchResponses []*cloudwatchResponse) map[string]*tsdb.QueryResult {
 	responsesByRefID := make(map[string][]*cloudwatchResponse)
+	refIDs := sort.StringSlice{}
 	for _, res := range cloudwatchResponses {
+		refIDs = append(refIDs, res.RefId)
 		responsesByRefID[res.RefId] = append(responsesByRefID[res.RefId], res)
 	}
+	// Ensure stable results
+	refIDs.Sort()
 
 	results := make(map[string]*tsdb.QueryResult)
-	for refID, responses := range responsesByRefID {
+	for _, refID := range refIDs {
+		responses := responsesByRefID[refID]
 		queryResult := tsdb.NewQueryResult()
 		queryResult.RefId = refID
 		queryResult.Meta = simplejson.New()

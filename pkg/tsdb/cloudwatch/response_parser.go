@@ -12,7 +12,9 @@ import (
 	"github.com/grafana/grafana/pkg/tsdb"
 )
 
-func (e *cloudWatchExecutor) parseResponse(metricDataOutputs []*cloudwatch.GetMetricDataOutput, queries map[string]*cloudWatchQuery) ([]*cloudwatchResponse, error) {
+func (e *cloudWatchExecutor) parseResponse(metricDataOutputs []*cloudwatch.GetMetricDataOutput,
+	queries map[string]*cloudWatchQuery) ([]*cloudwatchResponse, error) {
+	plog.Debug("Parsing metric data output", "queries", queries)
 	mdr := make(map[string]map[string]*cloudwatch.MetricDataResult)
 	for _, mdo := range metricDataOutputs {
 		requestExceededMaxLimit := false
@@ -61,7 +63,9 @@ func (e *cloudWatchExecutor) parseResponse(metricDataOutputs []*cloudwatch.GetMe
 	return cloudWatchResponses, nil
 }
 
-func parseGetMetricDataTimeSeries(metricDataResults map[string]*cloudwatch.MetricDataResult, query *cloudWatchQuery) (*tsdb.TimeSeriesSlice, bool, error) {
+func parseGetMetricDataTimeSeries(metricDataResults map[string]*cloudwatch.MetricDataResult,
+	query *cloudWatchQuery) (*tsdb.TimeSeriesSlice, bool, error) {
+	plog.Debug("Parsing metric data results", "results", metricDataResults)
 	metricDataResultLabels := make([]string, 0)
 	for k := range metricDataResults {
 		metricDataResultLabels = append(metricDataResultLabels, k)
