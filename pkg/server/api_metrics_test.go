@@ -18,6 +18,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudwatch/cloudwatchiface"
 	"github.com/aws/aws-sdk-go/service/cloudwatchlogs/cloudwatchlogsiface"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/grafana/grafana-plugin-sdk-go/data"
 	"github.com/grafana/grafana/pkg/tsdb"
 	"github.com/grafana/grafana/pkg/tsdb/cloudwatch"
@@ -77,7 +79,7 @@ func TestQueryCloudWatch_MetricFind(t *testing.T) {
 		}
 		tr := makeCWRequest(t, req, addr)
 
-		assert.Equal(t, tsdb.Response{
+		diff := cmp.Diff(tsdb.Response{
 			Results: map[string]*tsdb.QueryResult{
 				"A": {
 					RefId: "A",
@@ -104,7 +106,8 @@ func TestQueryCloudWatch_MetricFind(t *testing.T) {
 					},
 				},
 			},
-		}, tr)
+		}, tr, cmp.AllowUnexported(simplejson.Json{}))
+		assert.Equal(t, "", diff)
 	})
 }
 
@@ -154,14 +157,20 @@ func TestQueryCloudWatch_Logs(t *testing.T) {
 		// In the future we should use gocmp instead and ignore this field
 		_, err := dataFrames.Encoded()
 		require.NoError(t, err)
-		assert.Equal(t, tsdb.Response{
+		diff := cmp.Diff(tsdb.Response{
 			Results: map[string]*tsdb.QueryResult{
 				"A": {
 					RefId:      "A",
 					Dataframes: dataFrames,
 				},
 			},
-		}, tr)
+		}, tr, cmp.AllowUnexported(simplejson.Json{}),
+			cmp.Transformer("dataFrames", func(dfs tsdb.DataFrames) data.Frames {
+				fs, err := dfs.Decoded()
+				require.NoError(t, err)
+				return fs
+			}), cmpopts.IgnoreUnexported(data.Field{}))
+		assert.Equal(t, "", diff)
 	})
 }
 
@@ -226,8 +235,7 @@ func TestQueryCloudWatch_TimeSeries(t *testing.T) {
 		}
 		tr := makeCWRequest(t, req, addr)
 
-		// TODO: Use gocmp instead, so we can ignore tricky fields (timestamps)
-		assert.Equal(t, tsdb.Response{
+		diff := cmp.Diff(tsdb.Response{
 			Results: map[string]*tsdb.QueryResult{
 				"id": {
 					RefId: "id",
@@ -249,23 +257,37 @@ func TestQueryCloudWatch_TimeSeries(t *testing.T) {
 						{
 							Name: "test_stat1",
 							Points: tsdb.TimeSeriesPoints{
-								tsdb.NewTimePoint(null.FloatFrom(1), 0),
-								tsdb.NewTimePoint(null.FloatFromPtr(nil), 0),
-								tsdb.NewTimePoint(null.FloatFrom(2), 0),
+								tsdb.NewTimePoint(null.FloatFrom(1), 1594080000000.0),
+								tsdb.NewTimePoint(null.FloatFromPtr(nil), 1594080060000.0),
+								tsdb.NewTimePoint(null.FloatFrom(2), 1594166399000.0),
 							},
 						},
 						{
 							Name: "test_stat2",
 							Points: tsdb.TimeSeriesPoints{
-								tsdb.NewTimePoint(null.FloatFrom(3), 0),
-								tsdb.NewTimePoint(null.FloatFromPtr(nil), 0),
-								tsdb.NewTimePoint(null.FloatFrom(4), 0),
+								tsdb.NewTimePoint(null.FloatFrom(3), 1594080000000.0),
+								tsdb.NewTimePoint(null.FloatFromPtr(nil), 1594080060000.0),
+								tsdb.NewTimePoint(null.FloatFrom(4), 1594166399000.0),
 							},
 						},
 					},
 				},
 			},
-		}, tr)
+		}, tr, cmp.FilterPath(func(pth cmp.Path) bool {
+			return pth.String() == "Results.Meta"
+		}, cmp.Transformer("meta", func(j *simplejson.Json) map[string]interface{} {
+			m, err := j.Map()
+			oldGmd := m["gmdMeta"].([]interface{})
+			gmd := []map[string]interface{}{}
+			for _, vi := range oldGmd {
+				v := vi.(map[string]interface{})
+				delete(v, "Expression")
+				gmd = append(gmd, v)
+			}
+			require.NoError(t, err)
+			return m
+		})))
+		assert.Equal(t, "", diff)
 	})
 }
 
