@@ -253,6 +253,7 @@ func TestQueryCloudWatch_TimeSeries(t *testing.T) {
 							},
 						},
 					}),
+					// TODO: Expect data frames instead
 					Series: tsdb.TimeSeriesSlice{
 						{
 							Name: "test_stat1",
