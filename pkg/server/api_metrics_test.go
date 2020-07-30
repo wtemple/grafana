@@ -277,14 +277,15 @@ func TestQueryCloudWatch_TimeSeries(t *testing.T) {
 			return pth.String() == "Results.Meta"
 		}, cmp.Transformer("meta", func(j *simplejson.Json) map[string]interface{} {
 			m, err := j.Map()
+			require.NoError(t, err)
 			oldGmd := m["gmdMeta"].([]interface{})
-			gmd := []map[string]interface{}{}
+			gmd := []interface{}{}
 			for _, vi := range oldGmd {
 				v := vi.(map[string]interface{})
 				delete(v, "Expression")
 				gmd = append(gmd, v)
 			}
-			require.NoError(t, err)
+			m["gmdMeta"] = gmd
 			return m
 		})))
 		assert.Equal(t, "", diff)
