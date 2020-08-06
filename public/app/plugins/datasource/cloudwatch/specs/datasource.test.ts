@@ -185,7 +185,7 @@ describe('CloudWatchDatasource', () => {
         fakeFrames[i].meta!.stats = [
           {
             displayName: 'Records matched',
-            value: intitialRecordsMatched,
+            value: initialRecordsMatched,
           },
         ];
       }
