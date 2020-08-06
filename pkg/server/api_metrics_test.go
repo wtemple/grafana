@@ -26,7 +26,6 @@ import (
 
 	cwapi "github.com/aws/aws-sdk-go/service/cloudwatch"
 	"github.com/grafana/grafana/pkg/api/dtos"
-	"github.com/grafana/grafana/pkg/components/null"
 	"github.com/grafana/grafana/pkg/components/simplejson"
 	"github.com/grafana/grafana/pkg/infra/fs"
 	"github.com/grafana/grafana/pkg/models"
@@ -153,10 +152,6 @@ func TestQueryCloudWatch_Logs(t *testing.T) {
 				},
 			},
 		})
-		// Have to call this so that dataFrames.encoded is non-nil, for the comparison
-		// In the future we should use gocmp instead and ignore this field
-		_, err := dataFrames.Encoded()
-		require.NoError(t, err)
 		diff := cmp.Diff(tsdb.Response{
 			Results: map[string]*tsdb.QueryResult{
 				"A": {
@@ -253,25 +248,34 @@ func TestQueryCloudWatch_TimeSeries(t *testing.T) {
 							},
 						},
 					}),
-					// TODO: Expect data frames instead
-					Series: tsdb.TimeSeriesSlice{
-						{
-							Name: "test_stat1",
-							Points: tsdb.TimeSeriesPoints{
-								tsdb.NewTimePoint(null.FloatFrom(1), 1594080000000.0),
-								tsdb.NewTimePoint(null.FloatFromPtr(nil), 1594080060000.0),
-								tsdb.NewTimePoint(null.FloatFrom(2), 1594166399000.0),
+					Dataframes: tsdb.NewDecodedDataFrames(data.Frames{
+						data.NewFrame("test_stat1", data.NewField("timestamp", nil, []float64{
+							1594080000000.0,
+							1594080060000.0,
+							1594166399000.0,
+						}), data.NewField("value", nil, []*float64{
+							float64Ptr(1),
+							nil,
+							float64Ptr(2),
+						})).SetMeta(&data.FrameMeta{
+							Custom: map[string]interface{}{
+								"tags": map[string]interface{}{},
 							},
-						},
-						{
-							Name: "test_stat2",
-							Points: tsdb.TimeSeriesPoints{
-								tsdb.NewTimePoint(null.FloatFrom(3), 1594080000000.0),
-								tsdb.NewTimePoint(null.FloatFromPtr(nil), 1594080060000.0),
-								tsdb.NewTimePoint(null.FloatFrom(4), 1594166399000.0),
+						}),
+						data.NewFrame("test_stat2", data.NewField("timestamp", nil, []float64{
+							1594080000000.0,
+							1594080060000.0,
+							1594166399000.0,
+						}), data.NewField("value", nil, []*float64{
+							float64Ptr(3),
+							nil,
+							float64Ptr(4),
+						})).SetMeta(&data.FrameMeta{
+							Custom: map[string]interface{}{
+								"tags": map[string]interface{}{},
 							},
-						},
-					},
+						}),
+					}),
 				},
 			},
 		}, tr, cmp.FilterPath(func(pth cmp.Path) bool {
@@ -288,7 +292,11 @@ func TestQueryCloudWatch_TimeSeries(t *testing.T) {
 			}
 			m["gmdMeta"] = gmd
 			return m
-		})))
+		})), cmp.Transformer("dataFrames", func(dfs tsdb.DataFrames) data.Frames {
+			fs, err := dfs.Decoded()
+			require.NoError(t, err)
+			return fs
+		}), cmpopts.IgnoreUnexported(data.Field{}))
 		assert.Equal(t, "", diff)
 	})
 }
@@ -449,4 +457,8 @@ func setUpDatabase(t *testing.T, grafDir string) *sqlstore.SqlStore {
 	require.NoError(t, err)
 
 	return sqlStore
+}
+
+func float64Ptr(f float64) *float64 {
+	return &f
 }

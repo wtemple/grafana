@@ -8,8 +8,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/cloudwatch"
-	"github.com/grafana/grafana/pkg/components/null"
-	"github.com/grafana/grafana/pkg/tsdb"
+	"github.com/grafana/grafana-plugin-sdk-go/data"
 )
 
 func (e *cloudWatchExecutor) parseResponse(metricDataOutputs []*cloudwatch.GetMetricDataOutput,
@@ -43,13 +42,14 @@ func (e *cloudWatchExecutor) parseResponse(metricDataOutputs []*cloudwatch.GetMe
 
 	cloudWatchResponses := make([]*cloudwatchResponse, 0)
 	for id, lr := range mdr {
-		series, partialData, err := parseGetMetricDataTimeSeries(lr, queries[id])
+		plog.Debug("Handling metric data results", "id", id, "lr", lr)
+		frames, partialData, err := parseGetMetricDataTimeSeries(lr, queries[id])
 		if err != nil {
 			return nil, err
 		}
 
 		response := &cloudwatchResponse{
-			series:                  series,
+			DataFrames:              frames,
 			Period:                  queries[id].Period,
 			Expression:              queries[id].UsedExpression,
 			RefId:                   queries[id].RefId,
@@ -64,7 +64,7 @@ func (e *cloudWatchExecutor) parseResponse(metricDataOutputs []*cloudwatch.GetMe
 }
 
 func parseGetMetricDataTimeSeries(metricDataResults map[string]*cloudwatch.MetricDataResult,
-	query *cloudWatchQuery) (*tsdb.TimeSeriesSlice, bool, error) {
+	query *cloudWatchQuery) (data.Frames, bool, error) {
 	plog.Debug("Parsing metric data results", "results", metricDataResults)
 	metricDataResultLabels := make([]string, 0)
 	for k := range metricDataResults {
@@ -72,11 +72,15 @@ func parseGetMetricDataTimeSeries(metricDataResults map[string]*cloudwatch.Metri
 	}
 	sort.Strings(metricDataResultLabels)
 
+	plog.Debug("Metric data result labels", "labels", metricDataResultLabels)
+
 	partialData := false
-	result := tsdb.TimeSeriesSlice{}
+	frames := data.Frames{}
 	for _, label := range metricDataResultLabels {
 		metricDataResult := metricDataResults[label]
+		plog.Debug("Processing metric data result", "label", label, "statusCode", metricDataResult.StatusCode)
 		if *metricDataResult.StatusCode != "Complete" {
+			plog.Debug("Handling a partial result")
 			partialData = true
 		}
 
@@ -86,8 +90,8 @@ func parseGetMetricDataTimeSeries(metricDataResults map[string]*cloudwatch.Metri
 			}
 		}
 
-		// In case a multi-valued dimension is used and the cloudwatch query yields no values, create one empty time series for each dimension value.
-		// Use that dimension value to expand the alias field
+		// In case a multi-valued dimension is used and the cloudwatch query yields no values, create one empty time
+		// series for each dimension value. Use that dimension value to expand the alias field
 		if len(metricDataResult.Values) == 0 && query.isMultiValuedDimensionExpression() {
 			series := 0
 			multiValuedDimension := ""
@@ -99,62 +103,84 @@ func parseGetMetricDataTimeSeries(metricDataResults map[string]*cloudwatch.Metri
 			}
 
 			for _, value := range query.Dimensions[multiValuedDimension] {
-				emptySeries := tsdb.TimeSeries{
-					Tags:   map[string]string{multiValuedDimension: value},
-					Points: make([]tsdb.TimePoint, 0),
-				}
+				tags := map[string]string{multiValuedDimension: value}
 				for key, values := range query.Dimensions {
 					if key != multiValuedDimension && len(values) > 0 {
-						emptySeries.Tags[key] = values[0]
+						tags[key] = values[0]
 					}
 				}
 
-				emptySeries.Name = formatAlias(query, query.Stats, emptySeries.Tags, label)
-				result = append(result, &emptySeries)
+				emptyFrame := data.Frame{
+					Name: formatAlias(query, query.Stats, tags, label),
+					Meta: &data.FrameMeta{
+						Custom: map[string]interface{}{
+							"tags": tags,
+						},
+					},
+				}
+				frames = append(frames, &emptyFrame)
 			}
 		} else {
-			keys := make([]string, 0)
+			dims := make([]string, 0, len(query.Dimensions))
 			for k := range query.Dimensions {
-				keys = append(keys, k)
+				dims = append(dims, k)
 			}
-			sort.Strings(keys)
+			sort.Strings(dims)
 
-			series := tsdb.TimeSeries{
-				Tags:   make(map[string]string),
-				Points: make([]tsdb.TimePoint, 0),
-			}
-
-			for _, key := range keys {
-				values := query.Dimensions[key]
+			tags := map[string]string{}
+			for _, dim := range dims {
+				plog.Debug("Handling dimension", "dimension", dim)
+				values := query.Dimensions[dim]
 				if len(values) == 1 && values[0] != "*" {
-					series.Tags[key] = values[0]
+					plog.Debug("Got a tag value", "tag", dim, "value", values[0])
+					tags[dim] = values[0]
 				} else {
 					for _, value := range values {
 						if value == label || value == "*" {
-							series.Tags[key] = label
+							plog.Debug("Got a tag value", "tag", dim, "value", value, "label", label)
+							tags[dim] = label
 						} else if strings.Contains(label, value) {
-							series.Tags[key] = value
+							plog.Debug("Got a tag value", "tag", dim, "value", value, "label", label)
+							tags[dim] = value
 						}
 					}
 				}
 			}
 
-			series.Name = formatAlias(query, query.Stats, series.Tags, label)
-
+			timestamps := []float64{}
+			points := []*float64{}
 			for j, t := range metricDataResult.Timestamps {
 				if j > 0 {
 					expectedTimestamp := metricDataResult.Timestamps[j-1].Add(time.Duration(query.Period) * time.Second)
 					if expectedTimestamp.Before(*t) {
-						series.Points = append(series.Points, tsdb.NewTimePoint(null.FloatFromPtr(nil), float64(expectedTimestamp.Unix()*1000)))
+						timestamps = append(timestamps, float64(expectedTimestamp.Unix()*1000))
+						points = append(points, nil)
 					}
 				}
-				series.Points = append(series.Points, tsdb.NewTimePoint(null.FloatFrom(*metricDataResult.Values[j]),
-					float64(t.Unix())*1000))
+				val := metricDataResult.Values[j]
+				plog.Debug("Handling timestamp", "timestamp", t, "value", *val)
+				timestamps = append(timestamps, float64(t.Unix()*1000))
+				points = append(points, val)
 			}
-			result = append(result, &series)
+
+			fields := []*data.Field{
+				data.NewField("timestamp", nil, timestamps),
+				data.NewField("value", nil, points),
+			}
+			frame := data.Frame{
+				Name:   formatAlias(query, query.Stats, tags, label),
+				Fields: fields,
+				Meta: &data.FrameMeta{
+					Custom: map[string]interface{}{
+						"tags": tags,
+					},
+				},
+			}
+			frames = append(frames, &frame)
 		}
 	}
-	return &result, partialData, nil
+
+	return frames, partialData, nil
 }
 
 func formatAlias(query *cloudWatchQuery, stat string, dimensions map[string]string, label string) string {

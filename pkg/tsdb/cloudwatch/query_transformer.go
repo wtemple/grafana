@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/grafana/grafana-plugin-sdk-go/data"
 	"github.com/grafana/grafana/pkg/components/simplejson"
 	"github.com/grafana/grafana/pkg/tsdb"
 )
@@ -69,7 +70,7 @@ func (e *cloudWatchExecutor) transformQueryResponseToQueryResult(cloudwatchRespo
 		queryResult.RefId = refID
 		queryResult.Meta = simplejson.New()
 		queryResult.Series = tsdb.TimeSeriesSlice{}
-		timeSeries := make(tsdb.TimeSeriesSlice, 0)
+		frames := make(data.Frames, 0, len(responses))
 
 		requestExceededMaxLimit := false
 		partialData := false
@@ -79,7 +80,7 @@ func (e *cloudWatchExecutor) transformQueryResponseToQueryResult(cloudwatchRespo
 		}{}
 
 		for _, response := range responses {
-			timeSeries = append(timeSeries, *response.series...)
+			frames = append(frames, response.DataFrames...)
 			requestExceededMaxLimit = requestExceededMaxLimit || response.RequestExceededMaxLimit
 			partialData = partialData || response.PartialData
 			queryMeta = append(queryMeta, struct {
@@ -92,8 +93,8 @@ func (e *cloudWatchExecutor) transformQueryResponseToQueryResult(cloudwatchRespo
 			})
 		}
 
-		sort.Slice(timeSeries, func(i, j int) bool {
-			return timeSeries[i].Name < timeSeries[j].Name
+		sort.Slice(frames, func(i, j int) bool {
+			return frames[i].Name < frames[j].Name
 		})
 
 		if requestExceededMaxLimit {
@@ -103,7 +104,7 @@ func (e *cloudWatchExecutor) transformQueryResponseToQueryResult(cloudwatchRespo
 			queryResult.ErrorString = "Cloudwatch GetMetricData error: Too many datapoints requested - your search has been limited. Please try to reduce the time range"
 		}
 
-		queryResult.Series = append(queryResult.Series, timeSeries...)
+		queryResult.Dataframes = tsdb.NewDecodedDataFrames(frames)
 		queryResult.Meta.Set("gmdMeta", queryMeta)
 		results[refID] = queryResult
 	}

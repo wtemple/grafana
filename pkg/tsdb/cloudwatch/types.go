@@ -3,7 +3,7 @@ package cloudwatch
 import (
 	"fmt"
 
-	"github.com/grafana/grafana/pkg/tsdb"
+	"github.com/grafana/grafana-plugin-sdk-go/data"
 )
 
 type requestQuery struct {
@@ -24,7 +24,7 @@ type requestQuery struct {
 }
 
 type cloudwatchResponse struct {
-	series                  *tsdb.TimeSeriesSlice
+	DataFrames              data.Frames
 	Id                      string
 	RefId                   string
 	Expression              string
