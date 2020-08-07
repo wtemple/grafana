@@ -14,7 +14,9 @@ import (
 func (e *cloudWatchExecutor) parseResponse(metricDataOutputs []*cloudwatch.GetMetricDataOutput,
 	queries map[string]*cloudWatchQuery) ([]*cloudwatchResponse, error) {
 	plog.Debug("Parsing metric data output", "queries", queries)
-	mdr := make(map[string]map[string]*cloudwatch.MetricDataResult)
+	// Map from result ID -> label -> result
+	mdrs := make(map[string]map[string]*cloudwatch.MetricDataResult)
+	labels := map[string][]string{}
 	for _, mdo := range metricDataOutputs {
 		requestExceededMaxLimit := false
 		for _, message := range mdo.Messages {
@@ -24,37 +26,43 @@ func (e *cloudWatchExecutor) parseResponse(metricDataOutputs []*cloudwatch.GetMe
 		}
 
 		for _, r := range mdo.MetricDataResults {
-			if _, exists := mdr[*r.Id]; !exists {
-				mdr[*r.Id] = make(map[string]*cloudwatch.MetricDataResult)
-				mdr[*r.Id][*r.Label] = r
-			} else if _, exists := mdr[*r.Id][*r.Label]; !exists {
-				mdr[*r.Id][*r.Label] = r
+			id := *r.Id
+			label := *r.Label
+			if _, exists := mdrs[id]; !exists {
+				mdrs[id] = make(map[string]*cloudwatch.MetricDataResult)
+				mdrs[id][label] = r
+				labels[id] = append(labels[id], label)
+			} else if _, exists := mdrs[id][label]; !exists {
+				mdrs[id][label] = r
+				labels[id] = append(labels[id], label)
 			} else {
-				mdr[*r.Id][*r.Label].Timestamps = append(mdr[*r.Id][*r.Label].Timestamps, r.Timestamps...)
-				mdr[*r.Id][*r.Label].Values = append(mdr[*r.Id][*r.Label].Values, r.Values...)
+				mdr := mdrs[id][label]
+				mdr.Timestamps = append(mdr.Timestamps, r.Timestamps...)
+				mdr.Values = append(mdr.Values, r.Values...)
 				if *r.StatusCode == "Complete" {
-					mdr[*r.Id][*r.Label].StatusCode = r.StatusCode
+					mdr.StatusCode = r.StatusCode
 				}
 			}
-			queries[*r.Id].RequestExceededMaxLimit = requestExceededMaxLimit
+			queries[id].RequestExceededMaxLimit = requestExceededMaxLimit
 		}
 	}
 
 	cloudWatchResponses := make([]*cloudwatchResponse, 0)
-	for id, lr := range mdr {
+	for id, lr := range mdrs {
 		plog.Debug("Handling metric data results", "id", id, "lr", lr)
-		frames, partialData, err := parseGetMetricDataTimeSeries(lr, queries[id])
+		query := queries[id]
+		frames, partialData, err := parseGetMetricDataTimeSeries(lr, labels[id], query)
 		if err != nil {
 			return nil, err
 		}
 
 		response := &cloudwatchResponse{
 			DataFrames:              frames,
-			Period:                  queries[id].Period,
-			Expression:              queries[id].UsedExpression,
-			RefId:                   queries[id].RefId,
-			Id:                      queries[id].Id,
-			RequestExceededMaxLimit: queries[id].RequestExceededMaxLimit,
+			Period:                  query.Period,
+			Expression:              query.UsedExpression,
+			RefId:                   query.RefId,
+			Id:                      query.Id,
+			RequestExceededMaxLimit: query.RequestExceededMaxLimit,
 			PartialData:             partialData,
 		}
 		cloudWatchResponses = append(cloudWatchResponses, response)
@@ -63,20 +71,12 @@ func (e *cloudWatchExecutor) parseResponse(metricDataOutputs []*cloudwatch.GetMe
 	return cloudWatchResponses, nil
 }
 
-func parseGetMetricDataTimeSeries(metricDataResults map[string]*cloudwatch.MetricDataResult,
+func parseGetMetricDataTimeSeries(metricDataResults map[string]*cloudwatch.MetricDataResult, labels []string,
 	query *cloudWatchQuery) (data.Frames, bool, error) {
 	plog.Debug("Parsing metric data results", "results", metricDataResults)
-	metricDataResultLabels := make([]string, 0)
-	for k := range metricDataResults {
-		metricDataResultLabels = append(metricDataResultLabels, k)
-	}
-	sort.Strings(metricDataResultLabels)
-
-	plog.Debug("Metric data result labels", "labels", metricDataResultLabels)
-
 	partialData := false
 	frames := data.Frames{}
-	for _, label := range metricDataResultLabels {
+	for _, label := range labels {
 		metricDataResult := metricDataResults[label]
 		plog.Debug("Processing metric data result", "label", label, "statusCode", metricDataResult.StatusCode)
 		if *metricDataResult.StatusCode != "Complete" {
