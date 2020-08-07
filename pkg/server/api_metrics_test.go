@@ -253,28 +253,20 @@ func TestQueryCloudWatch_TimeSeries(t *testing.T) {
 							1594080000000.0,
 							1594080060000.0,
 							1594166399000.0,
-						}), data.NewField("value", nil, []*float64{
+						}), data.NewField("value", data.Labels{}, []*float64{
 							float64Ptr(1),
 							nil,
 							float64Ptr(2),
-						})).SetMeta(&data.FrameMeta{
-							Custom: map[string]interface{}{
-								"tags": map[string]interface{}{},
-							},
-						}),
+						})),
 						data.NewFrame("test_stat2", data.NewField("timestamp", nil, []float64{
 							1594080000000.0,
 							1594080060000.0,
 							1594166399000.0,
-						}), data.NewField("value", nil, []*float64{
+						}), data.NewField("value", data.Labels{}, []*float64{
 							float64Ptr(3),
 							nil,
 							float64Ptr(4),
-						})).SetMeta(&data.FrameMeta{
-							Custom: map[string]interface{}{
-								"tags": map[string]interface{}{},
-							},
-						}),
+						})),
 					}),
 				},
 			},

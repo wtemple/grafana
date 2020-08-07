@@ -165,16 +165,11 @@ func parseGetMetricDataTimeSeries(metricDataResults map[string]*cloudwatch.Metri
 
 			fields := []*data.Field{
 				data.NewField("timestamp", nil, timestamps),
-				data.NewField("value", nil, points),
+				data.NewField("value", tags, points),
 			}
 			frame := data.Frame{
 				Name:   formatAlias(query, query.Stats, tags, label),
 				Fields: fields,
-				Meta: &data.FrameMeta{
-					Custom: map[string]interface{}{
-						"tags": tags,
-					},
-				},
 			}
 			frames = append(frames, &frame)
 		}
